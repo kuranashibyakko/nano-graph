@@ -7,11 +7,12 @@ END = "END"
 class StateGraph:
     """A lightweight, cyclic state-machine engine for AI agents."""
 
-    def __init__(self):
+    def __init__(self, checkpointer=None):
         self.nodes: dict[str, Callable[[dict], dict]] = {}
         self.edges: dict[str, str] = {}
         self.conditional_edges: dict[str, Callable[[dict], str]] = {}
         self.entry_point: str | None = None
+        self.checkpointer = checkpointer
 
     def add_node(self, name: str, func: Callable[[dict], dict]) -> None:
         """Registers a node function in the graph."""
@@ -33,16 +34,16 @@ class StateGraph:
 
         self.conditional_edges[from_node] = router_fn
 
-    def invoke(self, initial_state: dict[str, Any], max_steps: int = 10) -> dict[str, Any]:
+    def invoke(self, initial_state: dict[str, Any], max_steps: int = 10,thread_id: str = "default",start_at: str | None = None,) -> dict[str, Any]:
         """Executes the state graph starting from `entry_point` until `END` is reached."""
         if not self.entry_point:
             raise ValueError("Graph entry_point is not set.")
 
         # Make a deep copy so we don't mutate the caller's original dict
         state = copy.deepcopy(initial_state)
-        state["_trace"] = []  # Tracks the sequence of visited node names
+        state.setdefault("_trace", [])  # Tracks the sequence of visited node names
 
-        current_node = self.entry_point
+        current_node = start_at or self.entry_point
         steps = 0
 
         while current_node != END:
@@ -59,6 +60,9 @@ class StateGraph:
 
             if isinstance(updates, dict):
                 state.update(updates)
+            
+            if self.checkpointer is not None:
+                self.checkpointer.save_checkpoint(thread_id, steps, current_node, state)
 
             if current_node in self.conditional_edges:
                 current_node = self.conditional_edges[current_node](state)
