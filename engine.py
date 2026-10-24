@@ -33,14 +33,32 @@ class StateGraph:
         """Adds a dynamic conditional edge where `router_fn(state)` returns the next node name."""
 
         self.conditional_edges[from_node] = router_fn
+    
+    def to_mermaid(self) -> str:
+        """Compiles the graph into a Mermaid flowchart."""
+        lines = ["graph TD"]
 
-    def invoke(self, initial_state: dict[str, Any], max_steps: int = 10,thread_id: str = "default",start_at: str | None = None,) -> dict[str, Any]:
+        if self.entry_point:
+            lines.append(f"    START((START)) --> {self.entry_point}")
+
+        for src, dst in self.edges.items():
+            lines.append(f"    {src} --> {dst}")
+
+        for src, router_fn in self.conditional_edges.items():
+            lines.append(f"    {src} -.->|{router_fn.__name__}| {src}_router{{Router}}")
+
+
+        return "\n".join(lines)
+
+    def invoke(self, initial_state: dict[str, Any], max_steps: int = 10,thread_id: str = "default",start_at: str | None = None,interrupt_before: list[str] | None = None) -> dict[str, Any]:
         """Executes the state graph starting from `entry_point` until `END` is reached."""
         if not self.entry_point:
             raise ValueError("Graph entry_point is not set.")
 
         # Make a deep copy so we don't mutate the caller's original dict
         state = copy.deepcopy(initial_state)
+        state.setdefault("_trace", [])  # Tracks the sequence of visited node names
+        state.pop("_interrupted_at", None)  # Clear any previous interrupt flag on resume
         state.setdefault("_trace", [])  # Tracks the sequence of visited node names
 
         current_node = start_at or self.entry_point
@@ -52,6 +70,11 @@ class StateGraph:
 
             if current_node not in self.nodes:
                 raise KeyError(f"Unknown node: {current_node}")
+            
+            if ( interrupt_before and current_node in interrupt_before and steps > 0):
+                state["_interrupted_at"] = current_node
+                return state
+
             
             state["_trace"].append(current_node)
             steps+=1
