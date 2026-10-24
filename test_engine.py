@@ -2,6 +2,7 @@ import pytest
 from engine import StateGraph, END
 from checkpoint import MemoryCheckpointer
 
+
 def test_linear_graph():
     graph = StateGraph()
     graph.add_node("step1", lambda s: {"x": s["x"] + 1})
@@ -35,7 +36,6 @@ def test_max_steps_protection():
         graph.invoke({"count": 0}, max_steps=4)
 
 
-
 def test_checkpoint_and_time_travel():
     cp = MemoryCheckpointer()
     graph = StateGraph(checkpointer=cp)
@@ -66,3 +66,45 @@ def test_checkpoint_and_time_travel():
     # (100 * 2) - 5 = 195
     assert resumed_final["val"] == 195
     assert resumed_final["_trace"] == ["step1", "step2", "step3"]
+
+
+def test_human_in_the_loop_interrupt_and_resume():
+    graph = StateGraph()
+    graph.add_node("draft_sql", lambda s: {"query": "DELETE FROM users"})
+    graph.add_node("execute_sql", lambda s: {"executed": s["query"]})
+
+    graph.set_entry_point("draft_sql")
+    graph.add_edge("draft_sql", "execute_sql")
+
+    # 1. Run with breakpoint before 'execute_sql'
+    paused = graph.invoke({"query": "", "executed": None}, interrupt_before=["execute_sql"])
+    assert paused["_interrupted_at"] == "execute_sql"
+    assert paused["query"] == "DELETE FROM users"
+    assert paused["executed"] is None  # Prove execute_sql did NOT run yet!
+    assert paused["_trace"] == ["draft_sql"]
+
+    # 2. Human edits the dangerous query in state and resumes at 'execute_sql'
+    paused["query"] = "SELECT * FROM users"
+    final = graph.invoke(paused, start_at="execute_sql", interrupt_before=["execute_sql"])
+
+    assert "_interrupted_at" not in final
+    assert final["executed"] == "SELECT * FROM users"
+    assert final["_trace"] == ["draft_sql", "execute_sql"]
+
+
+def test_to_mermaid_generation():
+    def my_router(state: dict) -> str:
+        return END
+
+    graph = StateGraph()
+    graph.add_node("gen", lambda s: s)
+    graph.add_node("exec", lambda s: s)
+    graph.set_entry_point("gen")
+    graph.add_edge("gen", "exec")
+    graph.add_conditional_edge("exec", my_router)
+
+    diagram = graph.to_mermaid()
+    assert "graph TD" in diagram
+    assert "START((START)) --> gen" in diagram
+    assert "gen --> exec" in diagram
+    assert "exec -.->|my_router| exec_router{Router}" in diagram
